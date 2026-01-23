@@ -7,6 +7,10 @@ from typing import Any
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from src.logging_config import get_logger
+
+logger = get_logger("calendly")
+
 
 class CalendlyClient:
     """Client for interacting with the Calendly API."""
@@ -16,6 +20,7 @@ class CalendlyClient:
     def __init__(self, api_token: str | None = None):
         self.api_token = api_token or os.getenv("CALENDLY_API_TOKEN")
         if not self.api_token:
+            logger.error("CALENDLY_API_TOKEN not provided")
             raise ValueError("CALENDLY_API_TOKEN is required")
         self.headers = {
             "Authorization": f"Bearer {self.api_token}",
@@ -24,30 +29,47 @@ class CalendlyClient:
         self._user_uri: str | None = None
         self._organization_uri: str | None = None
         self._event_type_uri: str | None = None
+        logger.debug("CalendlyClient initialized")
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     def _request(self, method: str, endpoint: str, **kwargs) -> dict[str, Any]:
         """Make an HTTP request to the Calendly API with retry logic."""
         url = f"{self.BASE_URL}{endpoint}"
+        logger.debug(f"API Request: {method} {endpoint}")
+
         with httpx.Client(timeout=30.0) as client:
             response = client.request(method, url, headers=self.headers, **kwargs)
+
+            if response.status_code >= 400:
+                logger.error(f"API Error: {response.status_code} - {response.text[:200]}")
+
             response.raise_for_status()
+            logger.debug(f"API Response: {response.status_code}")
             return response.json()
 
     def get_current_user(self) -> dict[str, Any]:
         """Get the current authenticated user."""
+        logger.info("Fetching current user info")
         data = self._request("GET", "/users/me")
         self._user_uri = data["resource"]["uri"]
         self._organization_uri = data["resource"]["current_organization"]
+        logger.info(f"Authenticated as: {data['resource'].get('name', 'Unknown')}")
         return data["resource"]
 
     def get_event_types(self) -> list[dict[str, Any]]:
         """Get all event types for the current user."""
         if not self._user_uri:
             self.get_current_user()
+
+        logger.info("Fetching event types")
         data = self._request("GET", "/event_types", params={"user": self._user_uri})
+
         if data["collection"]:
             self._event_type_uri = data["collection"][0]["uri"]
+            logger.info(f"Found {len(data['collection'])} event type(s)")
+        else:
+            logger.warning("No event types found")
+
         return data["collection"]
 
     def get_available_times(
@@ -68,10 +90,11 @@ class CalendlyClient:
             self.get_event_types()
 
         if start_time is None:
-            # Start 1 hour from now to ensure it's in the future
             start_time = datetime.now(UTC) + timedelta(hours=1)
         if end_time is None:
             end_time = start_time + timedelta(days=7)
+
+        logger.info(f"Fetching available times from {start_time.date()} to {end_time.date()}")
 
         data = self._request(
             "GET",
@@ -82,7 +105,10 @@ class CalendlyClient:
                 "end_time": end_time.strftime("%Y-%m-%dT%H:%M:%S.000000Z"),
             },
         )
-        return data.get("collection", [])
+
+        slots = data.get("collection", [])
+        logger.info(f"Found {len(slots)} available slot(s)")
+        return slots
 
     def create_scheduling_link(self) -> dict[str, Any]:
         """Create a single-use scheduling link.
@@ -93,13 +119,16 @@ class CalendlyClient:
         if not self._event_type_uri:
             self.get_event_types()
 
+        logger.info("Creating single-use scheduling link")
         payload = {
             "max_event_count": 1,
             "owner": self._event_type_uri,
             "owner_type": "EventType",
         }
         data = self._request("POST", "/scheduling_links", json=payload)
-        return data.get("resource", data)
+        result = data.get("resource", data)
+        logger.info(f"Scheduling link created: {result.get('booking_url', 'N/A')[:50]}...")
+        return result
 
     def get_booking_url_for_slot(self, slot: dict[str, Any]) -> str:
         """Get the direct booking URL for a specific time slot.
@@ -110,7 +139,9 @@ class CalendlyClient:
         Returns:
             Direct URL to book this specific slot
         """
-        return slot.get("scheduling_url", "")
+        url = slot.get("scheduling_url", "")
+        logger.debug(f"Booking URL for slot: {url[:50]}..." if url else "No booking URL")
+        return url
 
     def format_available_slots(
         self,
@@ -140,6 +171,8 @@ class CalendlyClient:
                     "booking_url": slot.get("scheduling_url", ""),
                 }
             )
+
+        logger.debug(f"Formatted {len(formatted)} slots for display")
         return formatted
 
     def get_scheduled_events(
@@ -159,6 +192,8 @@ class CalendlyClient:
         if not self._user_uri:
             self.get_current_user()
 
+        logger.info(f"Fetching scheduled events (email={email}, status={status})")
+
         params = {
             "user": self._user_uri,
             "status": status,
@@ -167,7 +202,9 @@ class CalendlyClient:
             params["invitee_email"] = email
 
         data = self._request("GET", "/scheduled_events", params=params)
-        return data.get("collection", [])
+        events = data.get("collection", [])
+        logger.info(f"Found {len(events)} scheduled event(s)")
+        return events
 
     def get_event_invitees(self, event_uuid: str) -> list[dict[str, Any]]:
         """Get invitees for a specific event.
@@ -178,8 +215,11 @@ class CalendlyClient:
         Returns:
             List of invitees for the event
         """
+        logger.debug(f"Fetching invitees for event: {event_uuid}")
         data = self._request("GET", f"/scheduled_events/{event_uuid}/invitees")
-        return data.get("collection", [])
+        invitees = data.get("collection", [])
+        logger.debug(f"Found {len(invitees)} invitee(s)")
+        return invitees
 
     def cancel_event(self, event_uuid: str, reason: str = "Cancelled by user") -> dict[str, Any]:
         """Cancel a scheduled event.
@@ -191,11 +231,13 @@ class CalendlyClient:
         Returns:
             The cancellation response
         """
+        logger.info(f"Cancelling event: {event_uuid} (reason: {reason})")
         data = self._request(
             "POST",
             f"/scheduled_events/{event_uuid}/cancellation",
             json={"reason": reason},
         )
+        logger.info(f"Event {event_uuid} cancelled successfully")
         return data.get("resource", data)
 
     def reschedule_event(
@@ -214,19 +256,22 @@ class CalendlyClient:
         Returns:
             The rescheduled event or reschedule link
         """
-        # Get invitees for this event to get the invitee UUID
+        logger.info(f"Rescheduling event {event_uuid} to {new_start_time}")
+
         invitees = self.get_event_invitees(event_uuid)
         if not invitees:
+            logger.error(f"No invitees found for event {event_uuid}")
             raise ValueError("No invitees found for this event")
 
         invitee_uuid = invitees[0]["uri"].split("/")[-1]
+        logger.debug(f"Using invitee: {invitee_uuid}")
 
-        # Create reschedule - returns a new booking
         data = self._request(
             "POST",
             f"/scheduled_events/{event_uuid}/invitees/{invitee_uuid}/reschedule",
             json={"start_time": new_start_time},
         )
+        logger.info(f"Event {event_uuid} rescheduled successfully")
         return data.get("resource", data)
 
 
@@ -238,5 +283,6 @@ def get_calendly_client() -> CalendlyClient:
     """Get or create a Calendly client instance."""
     global _client
     if _client is None:
+        logger.debug("Creating new CalendlyClient instance")
         _client = CalendlyClient()
     return _client
