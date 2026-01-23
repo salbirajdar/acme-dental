@@ -41,38 +41,55 @@ CLINIC DETAILS:
 
 BOOKING FLOW:
 1. Greet the patient and understand their intent
-2. Use check_availability to show available slots
-3. Once they choose a time, collect their name and email
-4. Use get_booking_link to provide them with a booking link for their selected slot
-5. Confirm the booking details
+2. Use check_availability to show available slots (grouped by date)
+3. Patient selects a date and time naturally (e.g., "Monday at 2:30 PM")
+4. Collect their full name and email address
+5. Use get_booking_link with the selected date, time, name, and email
+6. Confirm the booking details and provide the link
 
 Always be helpful and guide patients through the process step by step."""
 
 
 @tool
 def check_availability(
-    days_ahead: Annotated[int, "Number of days ahead to check (1-14, default 7)"] = 7,
+    time_preference: Annotated[
+        str, "Time preference: 'morning' (9am-12pm), 'afternoon' (12pm-5pm), or 'all' (default)"
+    ] = "all",
 ) -> str:
     """Check available appointment slots for dental check-ups.
 
     Use this tool when a patient wants to book an appointment or see available times.
-    Returns a list of available time slots with dates and times.
+    Returns a list of available time slots grouped by date.
+    Use time_preference to filter: 'morning', 'afternoon', or 'all'.
     """
-    logger.info(f"Tool: check_availability called (days_ahead={days_ahead})")
+    logger.info(f"Tool: check_availability called (preference={time_preference})")
     try:
         client = get_calendly_client()
-        slots = client.format_available_slots(max_slots=10)
+        slots = client.format_available_slots(max_slots=50)
 
         if not slots:
             logger.warning("No available slots found")
             return "No available slots found in the next 7 days. Please try again later."
 
-        result = "Available appointment slots:\n\n"
-        for i, slot in enumerate(slots, 1):
-            result += f"{i}. {slot['date']} at {slot['time']}\n"
+        # Filter by time preference
+        if time_preference == "morning":
+            slots = [s for s in slots if "AM" in s["time"]]
+        elif time_preference == "afternoon":
+            slots = [s for s in slots if "PM" in s["time"]]
 
-        result += "\nPlease let me know which slot works best for you!"
-        logger.info(f"Returned {len(slots)} available slots")
+        # Group slots by date
+        from collections import defaultdict
+
+        by_date: dict[str, list] = defaultdict(list)
+        for slot in slots:
+            by_date[slot["date"]].append(slot["time"])
+
+        result = "Available appointment slots:\n\n"
+        for date, times in list(by_date.items())[:5]:  # Show up to 5 days
+            result += f"**{date}:** {', '.join(times)}\n"
+
+        result += "\nJust tell me your preferred date and time (e.g., 'Monday at 2:30 PM')."
+        logger.info(f"Returned slots across {len(by_date)} day(s)")
         return result
     except Exception as e:
         logger.error(f"Error checking availability: {e}")
@@ -81,40 +98,79 @@ def check_availability(
 
 @tool
 def get_booking_link(
-    slot_number: Annotated[int, "The slot number the patient selected (1-10)"],
+    selected_date: Annotated[str, "The date the patient selected (e.g., 'Monday, January 27, 2026' or 'Monday')"],
+    selected_time: Annotated[str, "The time the patient selected (e.g., '2:30 PM' or '14:30')"],
     patient_name: Annotated[str, "The patient's full name"],
     patient_email: Annotated[str, "The patient's email address"],
 ) -> str:
     """Get a booking link for a specific time slot.
 
     Use this tool after the patient has:
-    1. Selected a time slot from the available options
+    1. Selected a date and time from the available options
     2. Provided their full name
     3. Provided their email address
 
     Returns a booking link the patient can use to complete their appointment.
     """
-    logger.info(f"Tool: get_booking_link called (slot={slot_number}, name={patient_name}, email={patient_email})")
+    logger.info(f"Tool: get_booking_link called (date={selected_date}, time={selected_time}, name={patient_name}, email={patient_email})")
     try:
         client = get_calendly_client()
-        slots = client.get_available_times()
+        slots = client.format_available_slots(max_slots=50)
 
-        if slot_number < 1 or slot_number > len(slots):
-            logger.warning(f"Invalid slot number: {slot_number}")
-            return f"Invalid slot number. Please choose a number between 1 and {min(10, len(slots))}."
+        if not slots:
+            logger.warning("No available slots found")
+            return "No available slots found. Please check availability first."
 
-        selected_slot = slots[slot_number - 1]
-        booking_url = client.get_booking_url_for_slot(selected_slot)
-        logger.info(f"Generated booking link for slot {slot_number}")
+        # Find the matching slot by date and time
+        selected_slot = None
+        selected_time_normalized = selected_time.upper().replace(" ", "")
 
-        # Format the time for confirmation
-        formatted = client.format_available_slots([selected_slot])[0]
+        for slot in slots:
+            # Check if the date matches (partial match for flexibility)
+            date_matches = False
+            slot_date_lower = slot["date"].lower()
+            selected_date_lower = selected_date.lower()
+
+            # Match by day name (e.g., "Monday") or full date
+            if selected_date_lower in slot_date_lower or slot_date_lower in selected_date_lower:
+                date_matches = True
+            # Also check for partial day name match (e.g., "mon" matches "Monday")
+            elif any(day in slot_date_lower for day in selected_date_lower.split()):
+                date_matches = True
+
+            if date_matches:
+                # Check if the time matches
+                slot_time_normalized = slot["time"].upper().replace(" ", "")
+                if selected_time_normalized in slot_time_normalized or slot_time_normalized in selected_time_normalized:
+                    selected_slot = slot
+                    break
+                # Also try matching without leading zero (e.g., "9:00" vs "09:00")
+                if selected_time_normalized.lstrip("0") == slot_time_normalized.lstrip("0"):
+                    selected_slot = slot
+                    break
+
+        if not selected_slot:
+            logger.warning(f"No matching slot found for {selected_date} at {selected_time}")
+            available_times = ", ".join([f"{s['date']} at {s['time']}" for s in slots[:5]])
+            return f"I couldn't find an available slot for {selected_date} at {selected_time}. Please choose from the available times: {available_times}"
+
+        booking_url = selected_slot.get("booking_url", "")
+        if not booking_url:
+            # Fallback: get URL from raw slot data
+            raw_slots = client.get_available_times()
+            for raw_slot in raw_slots:
+                formatted = client.format_available_slots([raw_slot])[0]
+                if formatted["date"] == selected_slot["date"] and formatted["time"] == selected_slot["time"]:
+                    booking_url = client.get_booking_url_for_slot(raw_slot)
+                    break
+
+        logger.info(f"Generated booking link for {selected_slot['date']} at {selected_slot['time']}")
 
         return f"""Booking details confirmed:
 - Patient: {patient_name}
 - Email: {patient_email}
-- Date: {formatted["date"]}
-- Time: {formatted["time"]}
+- Date: {selected_slot["date"]}
+- Time: {selected_slot["time"]}
 - Duration: 30 minutes
 - Service: Dental Check-up
 

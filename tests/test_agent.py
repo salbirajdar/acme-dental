@@ -37,19 +37,44 @@ class TestCheckAvailability:
         with patch("src.agent.get_calendly_client") as mock_client:
             mock_client.return_value.format_available_slots.return_value = mock_slots
 
-            result = check_availability.invoke({"days_ahead": 7})
+            result = check_availability.invoke({"time_preference": "all"})
 
             assert "Available appointment slots" in result
             assert "Monday, January 26, 2026" in result
             assert "09:00 AM" in result
             assert "09:30 AM" in result
 
+    def test_filters_morning_slots(self):
+        """Test that morning preference filters to AM slots only."""
+        mock_slots = [
+            {
+                "date": "Monday, January 26, 2026",
+                "time": "09:00 AM",
+                "iso_time": "2026-01-26T09:00:00Z",
+                "booking_url": "https://calendly.com/test",
+            },
+            {
+                "date": "Monday, January 26, 2026",
+                "time": "02:00 PM",
+                "iso_time": "2026-01-26T14:00:00Z",
+                "booking_url": "https://calendly.com/test2",
+            },
+        ]
+
+        with patch("src.agent.get_calendly_client") as mock_client:
+            mock_client.return_value.format_available_slots.return_value = mock_slots
+
+            result = check_availability.invoke({"time_preference": "morning"})
+
+            assert "09:00 AM" in result
+            assert "02:00 PM" not in result
+
     def test_handles_no_slots(self):
         """Test handling when no slots are available."""
         with patch("src.agent.get_calendly_client") as mock_client:
             mock_client.return_value.format_available_slots.return_value = []
 
-            result = check_availability.invoke({"days_ahead": 7})
+            result = check_availability.invoke({"time_preference": "all"})
 
             assert "No available slots" in result
 
@@ -58,7 +83,7 @@ class TestCheckAvailability:
         with patch("src.agent.get_calendly_client") as mock_client:
             mock_client.return_value.format_available_slots.side_effect = Exception("API Error")
 
-            result = check_availability.invoke({"days_ahead": 7})
+            result = check_availability.invoke({"time_preference": "all"})
 
             assert "Sorry" in result
             assert "Error" in result
@@ -69,9 +94,66 @@ class TestGetBookingLink:
 
     def test_returns_booking_details(self):
         """Test that booking link is returned with correct details."""
-        mock_slots = [
-            {"start_time": "2026-01-26T09:00:00Z", "scheduling_url": "https://calendly.com/book/123"},
+        mock_formatted = [
+            {
+                "date": "Monday, January 26, 2026",
+                "time": "09:00 AM",
+                "iso_time": "2026-01-26T09:00:00Z",
+                "booking_url": "https://calendly.com/book/123",
+            },
+            {
+                "date": "Monday, January 26, 2026",
+                "time": "09:30 AM",
+                "iso_time": "2026-01-26T09:30:00Z",
+                "booking_url": "https://calendly.com/book/456",
+            },
         ]
+
+        with patch("src.agent.get_calendly_client") as mock_client:
+            mock_client.return_value.format_available_slots.return_value = mock_formatted
+
+            result = get_booking_link.invoke(
+                {
+                    "selected_date": "Monday, January 26, 2026",
+                    "selected_time": "09:00 AM",
+                    "patient_name": "John Doe",
+                    "patient_email": "john@example.com",
+                }
+            )
+
+            assert "John Doe" in result
+            assert "john@example.com" in result
+            assert "https://calendly.com/book/123" in result
+            assert "Monday, January 26, 2026" in result
+
+    def test_partial_date_match(self):
+        """Test that partial date matches work (e.g., just 'Monday')."""
+        mock_formatted = [
+            {
+                "date": "Monday, January 26, 2026",
+                "time": "02:30 PM",
+                "iso_time": "2026-01-26T14:30:00Z",
+                "booking_url": "https://calendly.com/book/789",
+            },
+        ]
+
+        with patch("src.agent.get_calendly_client") as mock_client:
+            mock_client.return_value.format_available_slots.return_value = mock_formatted
+
+            result = get_booking_link.invoke(
+                {
+                    "selected_date": "Monday",
+                    "selected_time": "2:30 PM",
+                    "patient_name": "Jane Doe",
+                    "patient_email": "jane@example.com",
+                }
+            )
+
+            assert "Jane Doe" in result
+            assert "Monday, January 26, 2026" in result
+
+    def test_no_matching_slot(self):
+        """Test handling when no matching slot is found."""
         mock_formatted = [
             {
                 "date": "Monday, January 26, 2026",
@@ -82,29 +164,18 @@ class TestGetBookingLink:
         ]
 
         with patch("src.agent.get_calendly_client") as mock_client:
-            mock_client.return_value.get_available_times.return_value = mock_slots
-            mock_client.return_value.get_booking_url_for_slot.return_value = "https://calendly.com/book/123"
             mock_client.return_value.format_available_slots.return_value = mock_formatted
 
             result = get_booking_link.invoke(
-                {"slot_number": 1, "patient_name": "John Doe", "patient_email": "john@example.com"}
+                {
+                    "selected_date": "Friday",
+                    "selected_time": "5:00 PM",
+                    "patient_name": "John Doe",
+                    "patient_email": "john@example.com",
+                }
             )
 
-            assert "John Doe" in result
-            assert "john@example.com" in result
-            assert "https://calendly.com/book/123" in result
-            assert "Monday, January 26, 2026" in result
-
-    def test_invalid_slot_number(self):
-        """Test handling of invalid slot number."""
-        with patch("src.agent.get_calendly_client") as mock_client:
-            mock_client.return_value.get_available_times.return_value = [{"start_time": "2026-01-26T09:00:00Z"}]
-
-            result = get_booking_link.invoke(
-                {"slot_number": 99, "patient_name": "John Doe", "patient_email": "john@example.com"}
-            )
-
-            assert "Invalid slot number" in result
+            assert "couldn't find" in result.lower()
 
 
 class TestFindBooking:
