@@ -34,8 +34,8 @@ class TestCheckAvailability:
             },
         ]
 
-        with patch("src.agent.get_calendly_client") as mock_client:
-            mock_client.return_value.format_available_slots.return_value = mock_slots
+        with patch("src.agent.get_scheduling_cache") as mock_cache:
+            mock_cache.return_value.get_availability.return_value = mock_slots
 
             result = check_availability.invoke({"time_preference": "all"})
 
@@ -46,6 +46,7 @@ class TestCheckAvailability:
 
     def test_filters_morning_slots(self):
         """Test that morning preference filters to AM slots only."""
+        # Cache returns filtered results based on time_preference
         mock_slots = [
             {
                 "date": "Monday, January 26, 2026",
@@ -53,16 +54,10 @@ class TestCheckAvailability:
                 "iso_time": "2026-01-26T09:00:00Z",
                 "booking_url": "https://calendly.com/test",
             },
-            {
-                "date": "Monday, January 26, 2026",
-                "time": "02:00 PM",
-                "iso_time": "2026-01-26T14:00:00Z",
-                "booking_url": "https://calendly.com/test2",
-            },
         ]
 
-        with patch("src.agent.get_calendly_client") as mock_client:
-            mock_client.return_value.format_available_slots.return_value = mock_slots
+        with patch("src.agent.get_scheduling_cache") as mock_cache:
+            mock_cache.return_value.get_availability.return_value = mock_slots
 
             result = check_availability.invoke({"time_preference": "morning"})
 
@@ -71,8 +66,8 @@ class TestCheckAvailability:
 
     def test_handles_no_slots(self):
         """Test handling when no slots are available."""
-        with patch("src.agent.get_calendly_client") as mock_client:
-            mock_client.return_value.format_available_slots.return_value = []
+        with patch("src.agent.get_scheduling_cache") as mock_cache:
+            mock_cache.return_value.get_availability.return_value = []
 
             result = check_availability.invoke({"time_preference": "all"})
 
@@ -80,8 +75,8 @@ class TestCheckAvailability:
 
     def test_handles_api_error(self):
         """Test graceful handling of API errors."""
-        with patch("src.agent.get_calendly_client") as mock_client:
-            mock_client.return_value.format_available_slots.side_effect = Exception("API Error")
+        with patch("src.agent.get_scheduling_cache") as mock_cache:
+            mock_cache.return_value.get_availability.side_effect = Exception("API Error")
 
             result = check_availability.invoke({"time_preference": "all"})
 
@@ -109,8 +104,8 @@ class TestGetBookingLink:
             },
         ]
 
-        with patch("src.agent.get_calendly_client") as mock_client:
-            mock_client.return_value.format_available_slots.return_value = mock_formatted
+        with patch("src.agent.get_scheduling_cache") as mock_cache:
+            mock_cache.return_value.get_availability.return_value = mock_formatted
 
             result = get_booking_link.invoke(
                 {
@@ -137,8 +132,8 @@ class TestGetBookingLink:
             },
         ]
 
-        with patch("src.agent.get_calendly_client") as mock_client:
-            mock_client.return_value.format_available_slots.return_value = mock_formatted
+        with patch("src.agent.get_scheduling_cache") as mock_cache:
+            mock_cache.return_value.get_availability.return_value = mock_formatted
 
             result = get_booking_link.invoke(
                 {
@@ -163,8 +158,8 @@ class TestGetBookingLink:
             },
         ]
 
-        with patch("src.agent.get_calendly_client") as mock_client:
-            mock_client.return_value.format_available_slots.return_value = mock_formatted
+        with patch("src.agent.get_scheduling_cache") as mock_cache:
+            mock_cache.return_value.get_availability.return_value = mock_formatted
 
             result = get_booking_link.invoke(
                 {
@@ -192,8 +187,8 @@ class TestFindBooking:
             }
         ]
 
-        with patch("src.agent.get_calendly_client") as mock_client:
-            mock_client.return_value.get_scheduled_events.return_value = mock_events
+        with patch("src.agent.get_scheduling_cache") as mock_cache:
+            mock_cache.return_value.get_bookings.return_value = mock_events
 
             result = find_booking.invoke({"patient_email": "john@example.com"})
 
@@ -203,8 +198,8 @@ class TestFindBooking:
 
     def test_no_booking_found(self):
         """Test handling when no booking is found."""
-        with patch("src.agent.get_calendly_client") as mock_client:
-            mock_client.return_value.get_scheduled_events.return_value = []
+        with patch("src.agent.get_scheduling_cache") as mock_cache:
+            mock_cache.return_value.get_bookings.return_value = []
 
             result = find_booking.invoke({"patient_email": "unknown@example.com"})
 
@@ -249,8 +244,8 @@ class TestGetRescheduleOptions:
             },
         ]
 
-        with patch("src.agent.get_calendly_client") as mock_client:
-            mock_client.return_value.format_available_slots.return_value = mock_slots
+        with patch("src.agent.get_scheduling_cache") as mock_cache:
+            mock_cache.return_value.get_availability.return_value = mock_slots
 
             result = get_reschedule_options.invoke({"event_id": "abc123"})
 

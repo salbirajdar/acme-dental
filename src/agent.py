@@ -1,6 +1,7 @@
 """LangGraph AI Agent for the Acme Dental Clinic."""
 
 import os
+from collections import defaultdict
 from typing import Annotated
 
 from langchain_anthropic import ChatAnthropic
@@ -9,6 +10,7 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
+from src.cache import get_scheduling_cache
 from src.calendly import get_calendly_client
 from src.knowledge_base import get_clinic_info, search_knowledge_base
 from src.logging_config import get_logger
@@ -64,22 +66,15 @@ def check_availability(
     """
     logger.info(f"Tool: check_availability called (preference={time_preference})")
     try:
-        client = get_calendly_client()
-        slots = client.format_available_slots(max_slots=50)
+        # Use cache instead of direct Calendly API call
+        cache = get_scheduling_cache()
+        slots = cache.get_availability(time_preference=time_preference)
 
         if not slots:
             logger.warning("No available slots found")
             return "No available slots found in the next 7 days. Please try again later."
 
-        # Filter by time preference
-        if time_preference == "morning":
-            slots = [s for s in slots if "AM" in s["time"]]
-        elif time_preference == "afternoon":
-            slots = [s for s in slots if "PM" in s["time"]]
-
         # Group slots by date
-        from collections import defaultdict
-
         by_date: dict[str, list] = defaultdict(list)
         for slot in slots:
             by_date[slot["date"]].append(slot["time"])
@@ -89,7 +84,7 @@ def check_availability(
             result += f"**{date}:** {', '.join(times)}\n"
 
         result += "\nJust tell me your preferred date and time (e.g., 'Monday at 2:30 PM')."
-        logger.info(f"Returned slots across {len(by_date)} day(s)")
+        logger.info(f"Returned slots across {len(by_date)} day(s) (from cache)")
         return result
     except Exception as e:
         logger.error(f"Error checking availability: {e}")
@@ -112,10 +107,14 @@ def get_booking_link(
 
     Returns a booking link the patient can use to complete their appointment.
     """
-    logger.info(f"Tool: get_booking_link called (date={selected_date}, time={selected_time}, name={patient_name}, email={patient_email})")
+    logger.info(
+        f"Tool: get_booking_link called (date={selected_date}, time={selected_time}, "
+        f"name={patient_name}, email={patient_email})"
+    )
     try:
-        client = get_calendly_client()
-        slots = client.format_available_slots(max_slots=50)
+        # Use cache instead of direct Calendly API call
+        cache = get_scheduling_cache()
+        slots = cache.get_availability()
 
         if not slots:
             logger.warning("No available slots found")
@@ -152,11 +151,15 @@ def get_booking_link(
         if not selected_slot:
             logger.warning(f"No matching slot found for {selected_date} at {selected_time}")
             available_times = ", ".join([f"{s['date']} at {s['time']}" for s in slots[:5]])
-            return f"I couldn't find an available slot for {selected_date} at {selected_time}. Please choose from the available times: {available_times}"
+            return (
+                f"I couldn't find an available slot for {selected_date} at {selected_time}. "
+                f"Please choose from the available times: {available_times}"
+            )
 
         booking_url = selected_slot.get("booking_url", "")
         if not booking_url:
-            # Fallback: get URL from raw slot data
+            # Fallback: get URL from raw slot data (direct API call as last resort)
+            client = get_calendly_client()
             raw_slots = client.get_available_times()
             for raw_slot in raw_slots:
                 formatted = client.format_available_slots([raw_slot])[0]
@@ -196,8 +199,9 @@ def find_booking(
     """
     logger.info(f"Tool: find_booking called (email={patient_email})")
     try:
-        client = get_calendly_client()
-        events = client.get_scheduled_events(email=patient_email)
+        # Use cache for bookings lookup
+        cache = get_scheduling_cache()
+        events = cache.get_bookings(patient_email)
 
         if not events:
             logger.info(f"No bookings found for {patient_email}")
@@ -213,7 +217,7 @@ def find_booking(
             result += f"   Status: {event.get('status', 'active')}\n"
             result += f"   Event ID: {event.get('uri', '').split('/')[-1]}\n\n"
 
-        logger.info(f"Found {len(events)} booking(s) for {patient_email}")
+        logger.info(f"Found {len(events)} booking(s) for {patient_email} (from cache)")
         return result
     except Exception as e:
         logger.error(f"Error finding booking: {e}")
@@ -238,7 +242,11 @@ def cancel_booking(
         client = get_calendly_client()
         client.cancel_event(event_id, reason=reason)
 
-        logger.info(f"Successfully cancelled event {event_id}")
+        # Invalidate cache since availability has changed
+        cache = get_scheduling_cache()
+        cache.invalidate_availability()
+        logger.info(f"Successfully cancelled event {event_id}, cache invalidated")
+
         return """Appointment cancelled successfully.
 
 A confirmation email will be sent shortly.
@@ -262,8 +270,9 @@ def get_reschedule_options(
     """
     logger.info(f"Tool: get_reschedule_options called (event_id={event_id})")
     try:
-        client = get_calendly_client()
-        slots = client.format_available_slots(max_slots=10)
+        # Use cache for availability
+        cache = get_scheduling_cache()
+        slots = cache.get_availability()[:10]  # Limit to 10 for reschedule
 
         if not slots:
             logger.warning("No slots available for rescheduling")
@@ -275,7 +284,7 @@ def get_reschedule_options(
 
         result += "\nPlease tell me which slot you'd like to reschedule to."
         result += "\nNote: Rescheduling less than 24 hours before your appointment may incur a fee."
-        logger.info(f"Returned {len(slots)} reschedule options")
+        logger.info(f"Returned {len(slots)} reschedule options (from cache)")
         return result
     except Exception as e:
         logger.error(f"Error getting reschedule options: {e}")

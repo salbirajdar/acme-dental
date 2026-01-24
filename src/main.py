@@ -5,6 +5,7 @@ import uuid
 from dotenv import load_dotenv
 
 from src.agent import create_acme_dental_agent, get_agent_response
+from src.cache import start_cache, stop_cache
 from src.logging_config import get_logger, setup_logging
 
 
@@ -16,6 +17,11 @@ def main():
     setup_logging()
     logger = get_logger("main")
     logger.info("Starting Acme Dental AI Agent")
+
+    # Start the scheduling cache with background sync
+    logger.info("Starting scheduling cache...")
+    cache = start_cache()
+    logger.info("Cache started - availability will be synced every 2 minutes")
 
     print("\n" + "=" * 60)
     print("Welcome to Acme Dental Clinic!")
@@ -35,27 +41,40 @@ def main():
     thread_id = str(uuid.uuid4())
     logger.info(f"Session started with thread_id: {thread_id}")
 
-    while True:
-        try:
-            user_input = input("You: ").strip()
+    try:
+        while True:
+            try:
+                user_input = input("You: ").strip()
 
-            if not user_input:
-                continue
+                if not user_input:
+                    continue
 
-            if user_input.lower() in ["exit", "quit", "q"]:
-                logger.info("User ended session")
-                print("\nThank you for visiting Acme Dental. Goodbye!")
+                if user_input.lower() in ["exit", "quit", "q"]:
+                    logger.info("User ended session")
+                    print("\nThank you for visiting Acme Dental. Goodbye!")
+                    break
+
+                # Show cache stats on 'stats' command (for debugging)
+                if user_input.lower() == "stats":
+                    stats = cache.get_stats()
+                    print(f"\nCache Stats: {stats}\n")
+                    continue
+
+                # Get response from the agent
+                response = get_agent_response(agent, user_input, thread_id)
+                print(f"\nAgent: {response}\n")
+
+            except KeyboardInterrupt:
+                print("\n\nSession interrupted. Goodbye!")
                 break
-
-            # Get response from the agent
-            response = get_agent_response(agent, user_input, thread_id)
-            print(f"\nAgent: {response}\n")
-
-        except KeyboardInterrupt:
-            print("\n\nSession interrupted. Goodbye!")
-            break
-        except Exception as e:
-            print(f"\nError: {e}\n")
+            except Exception as e:
+                logger.error(f"Error processing message: {e}")
+                print(f"\nError: {e}\n")
+    finally:
+        # Always stop the cache to clean up background threads
+        logger.info("Stopping cache...")
+        stop_cache()
+        logger.info("Cache stopped")
 
 
 if __name__ == "__main__":
