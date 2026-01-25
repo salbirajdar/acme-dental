@@ -1,135 +1,130 @@
 # Acme Dental AI Agent
 
-## Your Task
+An AI-powered receptionist for booking dental appointments through natural language conversation.
 
-Build an AI agent that allow users to book dental check-up appointments with a fictitious Acme Dental clinic through natural language conversation in a chat interface.
+## Features
 
-### The clinic
+- Book Appointments - Check availability and create bookings via Calendly
+- Reschedule/Cancel - Manage existing appointments by email lookup
+- Answer Questions - FAQ knowledge base for clinic information
+- Real-time Chat - React frontend with responsive UI
 
-Acme Dental is a simple dental practice that offers routine check-up appointments. The clinic operates with a single dentist and uses Calendly to manage its appointment scheduling. Below are the key details you'll need to know about the clinic's operations.
+## Architecture
 
-**Clinic Information:**
-- **Service Type**: Dental Check-up (only service offered)
-- **Appointment Duration**: 30 minutes
-- **Staff**: Only 1 dentist
-- **Scheduling System**: Calendly
-  - Calendar URL: Provided in the email.
-  - Calendly Token: Provided in the email.
-  - Use the Calendly API to check availability and manage bookings
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed architectural decisions.
 
-### Functional Requirements
+Stack:
+- Frontend: React + TypeScript + Vite
+- Backend: FastAPI + LangGraph + Claude Sonnet 4
+- Scheduling: Calendly API with caching layer
 
-The agent must support the following core booking operations:
-
-**1. Create New Bookings**
-- Greet users and understand their booking intent
-- Check available appointment slots via the Calendly calendar
-- Present available time slots to users
-- Help users select a suitable time slot
-- Collect necessary patient information (i.e full name and email address)
-- Create the booking through the Calendly API
-- Provide confirmation with appointment details (date, time, duration)
-
-**2. Reschedule Existing Bookings**
-- Allow users to Reschedule their existing appointments
-- Identify the booking to update
-- Retrieve current appointment details
-- Check availability for the new requested time slot
-- Reschedule the booking through the Calendly API
-- Provide updated confirmation with new appointment details
-
-**3. Cancel Bookings**
-- Allow users to cancel their appointments
-- Identify the booking to cancel
-- Retrieve current appointment details
-- Process cancellation through the Calendly API
-- Provide cancellation confirmation
-
-**4. Answer FAQs from the Knowledge Base**: 
-- A document containing the clinic's knowledge base (KB) will be provided
-- Extract and process information from the docu to build a searchable knowledge basent
-- Answer frequently asked questions about the clinic using information from the KB
-
-### Non Functional Requirements
-
-- Implement the agent using [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview)
-- You are free to choose the LLM model(s) or combination of models you consider most appropriate for this task
-- Be aware that API integrations (e.g. Calendly) may be unreliable or experience delays.
-- Document your architectural decisions
-
-## Getting Started
+## Quick Start
 
 ### Prerequisites
 
-- Python 3.11 or higher
-- [uv](https://github.com/astral-sh/uv) package manager
-- Anthropic API key (for Claude models)
-- Calendly API token (for booking functionality)
+- Python 3.11+
+- Node.js 18+
+- uv package manager (https://github.com/astral-sh/uv)
 
-### Installation
+### 1. Set up environment variables
 
-1. **Install uv** (if not already installed):
+Create `.env` in the `backend/` directory:
 
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+ANTHROPIC_API_KEY=your_key_here
+CALENDLY_API_TOKEN=your_token_here
 ```
 
-2. **Install dependencies**:
+### 2. Start the backend
 
-```bash
-make run
 ```
-
-or 
-
-```bash
+cd backend
 uv sync
+uv run uvicorn src.api:app --reload
 ```
 
-3. **Set up environment variables**:
+Backend runs at http://localhost:8000
 
-Create a `.env` file in the project root and add your API keys:
-
-```
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
-OPENAI_API_KEY=your_openai_api_key_here
-CALENDLY_API_TOKEN=your_calendly_api_token_here
-```
-
-### Starting the Agent
-
-To start the agent, run:
-
-```bash
-make run
-```
-
-Or directly:
-
-```bash
-uv run python src/main.py
-```
-
-You can then interact with the agent using natural language. 
-Type `exit`, `quit`, or `q` to end the session.
-
-### Development Commands
-
-The project includes a Makefile with convenient commands:
-
-```bash
-make install    # Install dependencies
-make format     # Format code with ruff
-make lint       # Lint code with ruff
-make check      # Format and lint code
-make run        # Run the agent
-make test       # Run tests
-make help       # Show all available commands
-```
-
-### Example Interaction
+### 3. Start the frontend
 
 ```
-You: Hello, I'd like to book an appointment
-Agent: [Agent responds and guides you through booking]
+cd frontend
+npm install
+npm run dev
+```
+
+Frontend runs at http://localhost:5173
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| /chat | POST | Send a message, get AI response |
+| /health | GET | Health check with cache stats |
+| /availability | GET | Get available appointment slots |
+| /bookings/search | POST | Search bookings by email |
+| /webhooks/calendly | POST | Calendly webhook receiver |
+
+## Agent Tools
+
+The AI agent has access to these tools:
+
+| Tool | Purpose |
+|------|---------|
+| check_availability | Show available appointment slots |
+| get_booking_link | Generate booking URL for selected slot |
+| find_booking | Look up appointments by email |
+| cancel_booking | Cancel an existing appointment |
+| get_reschedule_options | Show slots for rescheduling |
+| answer_faq | Answer questions from knowledge base |
+
+## Development
+
+### Backend
+
+```
+cd backend
+uv run ruff check .          # Lint
+uv run ruff format .         # Format
+uv run pytest                # Run tests
+```
+
+### Frontend
+
+```
+cd frontend
+npm run lint                 # Lint
+npm run build               # Production build
+```
+
+## Deployment
+
+Configured for Railway deployment:
+
+- Backend: Runs with 4 uvicorn workers
+- Frontend: Set VITE_API_URL to backend URL
+
+```
+# Backend Procfile
+web: uvicorn src.api:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WORKERS:-4}
+```
+
+## Project Structure
+
+```
+├── backend/
+│   ├── src/
+│   │   ├── api.py           # FastAPI endpoints
+│   │   ├── agent.py         # LangGraph agent + tools
+│   │   ├── calendly.py      # Calendly API client
+│   │   ├── cache.py         # Scheduling cache
+│   │   ├── knowledge_base.py # FAQ search
+│   │   └── webhooks.py      # Webhook handlers
+│   └── tests/
+├── frontend/
+│   └── src/
+│       ├── App.tsx          # Main chat interface
+│       ├── components/      # UI components
+│       └── services/api.ts  # Backend API client
+└── ARCHITECTURE.md          # Architectural decisions
 ```
