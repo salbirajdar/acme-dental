@@ -133,10 +133,7 @@ def handle_webhook_event(payload: dict[str, Any]) -> dict[str, str]:
         if event.invitee_email:
             cache.invalidate_bookings(event.invitee_email)
 
-        logger.info(
-            f"Booking created: {event.invitee_name} ({event.invitee_email}) "
-            f"at {event.scheduled_time}"
-        )
+        logger.info(f"Booking created: {event.invitee_name} ({event.invitee_email}) at {event.scheduled_time}")
         return {
             "status": "processed",
             "message": f"Booking created for {event.invitee_email}",
@@ -150,10 +147,7 @@ def handle_webhook_event(payload: dict[str, Any]) -> dict[str, str]:
         if event.invitee_email:
             cache.invalidate_bookings(event.invitee_email)
 
-        logger.info(
-            f"Booking cancelled: {event.invitee_name} ({event.invitee_email}) "
-            f"for {event.scheduled_time}"
-        )
+        logger.info(f"Booking cancelled: {event.invitee_name} ({event.invitee_email}) for {event.scheduled_time}")
         return {
             "status": "processed",
             "message": f"Cancellation processed for {event.invitee_email}",

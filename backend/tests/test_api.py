@@ -231,9 +231,7 @@ class TestBookingsEndpoint:
     def test_search_bookings(self, client):
         """Test searching bookings by email."""
         test_client, mock_cache = client
-        mock_cache.get_bookings.return_value = [
-            {"name": "Dental Check-up", "start_time": "2026-01-27T09:00:00Z"}
-        ]
+        mock_cache.get_bookings.return_value = [{"name": "Dental Check-up", "start_time": "2026-01-27T09:00:00Z"}]
 
         response = test_client.post(
             "/bookings/search",

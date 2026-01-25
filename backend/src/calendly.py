@@ -29,7 +29,23 @@ class CalendlyClient:
         self._user_uri: str | None = None
         self._organization_uri: str | None = None
         self._event_type_uri: str | None = None
-        logger.debug("CalendlyClient initialized")
+        # Persistent HTTP client with connection pooling
+        self._http_client = httpx.Client(
+            timeout=30.0,
+            headers=self.headers,
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+        )
+        logger.debug("CalendlyClient initialized with persistent connection pool")
+
+    def close(self):
+        """Close the HTTP client and release connections."""
+        if hasattr(self, "_http_client") and self._http_client:
+            self._http_client.close()
+            logger.debug("CalendlyClient HTTP client closed")
+
+    def __del__(self):
+        """Cleanup on garbage collection."""
+        self.close()
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     def _request(self, method: str, endpoint: str, **kwargs) -> dict[str, Any]:
@@ -37,15 +53,14 @@ class CalendlyClient:
         url = f"{self.BASE_URL}{endpoint}"
         logger.debug(f"API Request: {method} {endpoint}")
 
-        with httpx.Client(timeout=30.0) as client:
-            response = client.request(method, url, headers=self.headers, **kwargs)
+        response = self._http_client.request(method, url, **kwargs)
 
-            if response.status_code >= 400:
-                logger.error(f"API Error: {response.status_code} - {response.text[:200]}")
+        if response.status_code >= 400:
+            logger.error(f"API Error: {response.status_code} - {response.text[:200]}")
 
-            response.raise_for_status()
-            logger.debug(f"API Response: {response.status_code}")
-            return response.json()
+        response.raise_for_status()
+        logger.debug(f"API Response: {response.status_code}")
+        return response.json()
 
     def get_current_user(self) -> dict[str, Any]:
         """Get the current authenticated user."""

@@ -1,5 +1,6 @@
 """FastAPI backend for Acme Dental AI Agent."""
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from typing import Any
@@ -13,6 +14,9 @@ from src.agent import create_acme_dental_agent, get_agent_response
 from src.cache import get_scheduling_cache, start_cache, stop_cache
 from src.logging_config import get_logger, setup_logging
 from src.webhooks import handle_webhook_event, handle_webhook_ping, verify_webhook_signature
+
+# Request timeout for LLM calls (seconds)
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
 
 # Load environment variables
 load_dotenv()
@@ -143,13 +147,23 @@ async def chat(request: ChatRequest):
     logger.info(f"Chat request (thread={request.thread_id}): {request.message[:50]}...")
 
     try:
-        response = get_agent_response(_agent, request.message, request.thread_id)
+        # Run blocking LLM call in thread pool with timeout
+        response = await asyncio.wait_for(
+            asyncio.to_thread(get_agent_response, _agent, request.message, request.thread_id),
+            timeout=REQUEST_TIMEOUT,
+        )
 
         logger.info(f"Chat response generated ({len(response)} chars)")
         return ChatResponse(
             response=response,
             thread_id=request.thread_id,
         )
+    except TimeoutError:
+        logger.error(f"Chat request timed out after {REQUEST_TIMEOUT}s")
+        raise HTTPException(
+            status_code=504,
+            detail=f"Request timed out after {REQUEST_TIMEOUT} seconds. Please try again.",
+        ) from None
     except Exception as e:
         logger.error(f"Error processing chat request: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}") from e
