@@ -221,7 +221,6 @@ async def chat_stream(request: ChatRequest):
                     break
                 else:
                     yield {"event": "message", "data": chunk}
-                    # Small delay for natural reading pace (~30 words/sec)
                     await asyncio.sleep(0.20)
 
             await stream_task
