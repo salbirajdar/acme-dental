@@ -137,9 +137,11 @@ def get_booking_link(
         selected_time_normalized = selected_time.upper().replace(" ", "")
 
         day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        month_names = ["january", "february", "march", "april", "may", "june",
+                       "july", "august", "september", "october", "november", "december"]
 
         for slot in slots:
-            # Check if the date matches (partial match for flexibility)
+            # Check if the date matches
             date_matches = False
             slot_date_lower = slot["date"].lower()
             selected_date_lower = selected_date.lower()
@@ -148,10 +150,31 @@ def get_booking_link(
             if selected_date_lower in slot_date_lower or slot_date_lower in selected_date_lower:
                 date_matches = True
             else:
-                # Extract day name from selected date and match against slot day name
+                # Extract day name from both
                 selected_day = next((d for d in day_names if d in selected_date_lower), None)
                 slot_day = next((d for d in day_names if d in slot_date_lower), None)
-                if selected_day and slot_day and selected_day == slot_day:
+
+                # Extract date number (e.g., "6" from "February 6" or "06" from "February 06")
+                selected_date_num = re.search(r'\b(\d{1,2})\b', selected_date_lower)
+                slot_date_num = re.search(r'\b(\d{1,2})\b', slot_date_lower)
+
+                # Extract month from selected date
+                selected_month = next((m for m in month_names if m in selected_date_lower), None)
+
+                # If user specified a date number, require it to match
+                if selected_date_num and slot_date_num:
+                    # User specified a specific date number - must match exactly
+                    if int(selected_date_num.group(1)) == int(slot_date_num.group(1)):
+                        # If user also specified a month, it must match too
+                        if selected_month:
+                            if selected_month in slot_date_lower:
+                                date_matches = True
+                        else:
+                            # No month specified, just match by date number and day name
+                            if selected_day and slot_day and selected_day == slot_day:
+                                date_matches = True
+                elif selected_day and slot_day and selected_day == slot_day:
+                    # User only specified day name (e.g., "Friday") - match first occurrence
                     date_matches = True
 
             if date_matches:
