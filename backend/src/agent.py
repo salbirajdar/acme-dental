@@ -46,13 +46,20 @@ CLINIC DETAILS:
 - Location: Acme Dental Lane
 - Cancellation policy: Free cancellation up to 24 hours before; €20 fee for late cancellations
 
-BOOKING FLOW:
+BOOKING FLOW (for NEW appointments):
 1. Greet the patient and understand their intent
 2. Use check_availability to show available slots (grouped by date)
 3. Patient selects a date and time naturally (e.g., "Monday at 2:30 PM")
 4. Collect their full name and email address
 5. Use get_booking_link with the selected date, time, name, and email
 6. Confirm the booking details and provide the link
+
+RESCHEDULE FLOW (for EXISTING appointments):
+1. Use find_booking to locate the patient's existing appointment
+2. When they confirm they want to reschedule, use reschedule_booking with the event_id
+3. This returns Calendly's official reschedule link
+4. The patient clicks the link to choose a new time - their old appointment is automatically cancelled
+5. NEVER use get_booking_link for rescheduling - it creates a duplicate booking!
 
 Always be helpful and guide patients through the process step by step."""
 
@@ -329,6 +336,62 @@ def get_reschedule_options(
 
 
 @tool
+def reschedule_booking(
+    event_id: Annotated[str, "The event ID of the appointment to reschedule"],
+) -> str:
+    """Get the reschedule link for an existing appointment.
+
+    Use this tool when a patient wants to reschedule their appointment.
+    This returns Calendly's official reschedule link which allows the patient
+    to pick a new time and automatically cancels their old appointment.
+
+    IMPORTANT: Use this instead of get_booking_link for rescheduling!
+    """
+    logger.info(f"Tool: reschedule_booking called (event_id={event_id})")
+    try:
+        client = get_calendly_client()
+        invitees = client.get_event_invitees(event_id)
+
+        if not invitees:
+            logger.warning(f"No invitees found for event {event_id}")
+            return (
+                f"I couldn't find the booking details for event {event_id}. "
+                "Please verify the event ID or search for the booking again."
+            )
+
+        invitee = invitees[0]
+        reschedule_url = invitee.get("reschedule_url", "")
+
+        if not reschedule_url:
+            logger.warning(f"No reschedule URL found for event {event_id}")
+            return (
+                "This appointment cannot be rescheduled online. "
+                "Please contact the clinic directly to reschedule."
+            )
+
+        invitee_name = invitee.get("name", "Patient")
+        invitee_email = invitee.get("email", "")
+
+        logger.info(f"Retrieved reschedule URL for event {event_id}")
+
+        return f"""Reschedule link ready for {invitee_name}:
+
+Please click this link to reschedule your appointment:
+{reschedule_url}
+
+This will allow you to:
+1. Choose a new date and time from available slots
+2. Automatically cancel your current appointment
+
+You will receive a confirmation email at {invitee_email} once rescheduling is complete.
+
+Note: Rescheduling less than 24 hours before your appointment may incur a €20 fee."""
+    except Exception as e:
+        logger.error(f"Error getting reschedule link: {e}")
+        return f"Sorry, I couldn't get the reschedule link. Error: {e}"
+
+
+@tool
 def answer_faq(
     question: Annotated[str, "The patient's question about the clinic"],
 ) -> str:
@@ -370,6 +433,7 @@ TOOLS = [
     find_booking,
     cancel_booking,
     get_reschedule_options,
+    reschedule_booking,
     answer_faq,
 ]
 
