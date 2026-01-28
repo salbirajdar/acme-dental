@@ -91,12 +91,18 @@ class CalendlyClient:
         self,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
+        max_weeks: int = 4,
     ) -> list[dict[str, Any]]:
         """Get available appointment slots.
+
+        Searches in 7-day windows (Calendly API limit) until slots are found,
+        up to max_weeks ahead. Once the first available slot is found, returns
+        all slots within 7 days from that slot.
 
         Args:
             start_time: Start of the time range (defaults to 1 hour from now)
             end_time: End of the time range (defaults to 7 days from start)
+            max_weeks: Maximum number of weeks to search ahead (default 4)
 
         Returns:
             List of available time slots with start_time and invitees_remaining
@@ -106,10 +112,31 @@ class CalendlyClient:
 
         if start_time is None:
             start_time = datetime.now(UTC) + timedelta(hours=1)
-        if end_time is None:
-            end_time = start_time + timedelta(days=7)
 
-        logger.info(f"Fetching available times from {start_time.date()} to {end_time.date()}")
+        # If explicit end_time provided, do a single query
+        if end_time is not None:
+            return self._fetch_available_times(start_time, end_time)
+
+        # Search through 7-day windows until we find slots
+        window_start = start_time
+        for week in range(max_weeks):
+            window_end = window_start + timedelta(days=6, hours=23)
+            logger.info(f"Searching week {week + 1}/{max_weeks}: {window_start.date()} to {window_end.date()}")
+
+            slots = self._fetch_available_times(window_start, window_end)
+            if slots:
+                logger.info(f"Found {len(slots)} slot(s) in week {week + 1}")
+                return slots
+
+            # Move to next window
+            window_start = window_end + timedelta(hours=1)
+
+        logger.warning(f"No available slots found within {max_weeks} weeks")
+        return []
+
+    def _fetch_available_times(self, start_time: datetime, end_time: datetime) -> list[dict[str, Any]]:
+        """Fetch available times for a single date range from Calendly API."""
+        logger.debug(f"Fetching available times from {start_time.date()} to {end_time.date()}")
 
         data = self._request(
             "GET",
