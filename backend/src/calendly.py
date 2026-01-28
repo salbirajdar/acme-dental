@@ -3,6 +3,7 @@
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -10,6 +11,8 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from src.logging_config import get_logger
 
 logger = get_logger("calendly")
+
+CLINIC_TIMEZONE = ZoneInfo("Europe/Dublin")
 
 
 class CalendlyClient:
@@ -205,10 +208,11 @@ class CalendlyClient:
         formatted = []
         for slot in slots[:max_slots]:
             start_time = datetime.fromisoformat(slot["start_time"].replace("Z", "+00:00"))
+            local_time = start_time.astimezone(CLINIC_TIMEZONE)
             formatted.append(
                 {
-                    "date": start_time.strftime("%A, %B %d, %Y"),
-                    "time": start_time.strftime("%I:%M %p"),
+                    "date": local_time.strftime("%A, %B %d, %Y"),
+                    "time": local_time.strftime("%I:%M %p"),
                     "iso_time": slot["start_time"],
                     "booking_url": slot.get("scheduling_url", ""),
                 }
