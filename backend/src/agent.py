@@ -1,8 +1,11 @@
 """LangGraph AI Agent for the Acme Dental Clinic."""
 
 import os
+import re
 from collections import defaultdict
+from datetime import datetime
 from typing import Annotated
+from urllib.parse import urlencode
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, HumanMessage
@@ -11,7 +14,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from src.cache import get_scheduling_cache
-from src.calendly import get_calendly_client
+from src.calendly import CLINIC_TIMEZONE, get_calendly_client
 from src.knowledge_base import get_clinic_info, search_knowledge_base
 from src.logging_config import get_logger
 
@@ -126,29 +129,49 @@ def get_booking_link(
         selected_slot = None
         selected_time_normalized = selected_time.upper().replace(" ", "")
 
+        day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
         for slot in slots:
             # Check if the date matches (partial match for flexibility)
             date_matches = False
             slot_date_lower = slot["date"].lower()
             selected_date_lower = selected_date.lower()
 
-            # Match by day name (e.g., "Monday") or full date
+            # Match by full date string or substring (e.g., "Friday, February 06, 2026")
             if selected_date_lower in slot_date_lower or slot_date_lower in selected_date_lower:
                 date_matches = True
-            # Also check for partial day name match (e.g., "mon" matches "Monday")
-            elif any(day in slot_date_lower for day in selected_date_lower.split()):
-                date_matches = True
+            else:
+                # Extract day name from selected date and match against slot day name
+                selected_day = next((d for d in day_names if d in selected_date_lower), None)
+                slot_day = next((d for d in day_names if d in slot_date_lower), None)
+                if selected_day and slot_day and selected_day == slot_day:
+                    date_matches = True
 
             if date_matches:
-                # Check if the time matches
+                # Check if the time matches - normalize both to "HH:MMAM/PM" format
                 slot_time_normalized = slot["time"].upper().replace(" ", "")
-                if selected_time_normalized in slot_time_normalized or slot_time_normalized in selected_time_normalized:
+
+                # Normalize selected time: ensure 2-digit hour (e.g., "2:00PM" -> "02:00PM")
+                time_match = re.match(r"(\d{1,2}):?(\d{2})?\s*(AM|PM)?", selected_time_normalized, re.IGNORECASE)
+                if time_match:
+                    hour = time_match.group(1).zfill(2)
+                    minutes = time_match.group(2) or "00"
+                    ampm = (time_match.group(3) or "").upper()
+                    selected_time_formatted = f"{hour}:{minutes}{ampm}"
+                else:
+                    selected_time_formatted = selected_time_normalized
+
+                # Compare normalized times
+                if selected_time_formatted == slot_time_normalized:
                     selected_slot = slot
                     break
-                # Also try matching without leading zero (e.g., "9:00" vs "09:00")
-                if selected_time_normalized.lstrip("0") == slot_time_normalized.lstrip("0"):
-                    selected_slot = slot
-                    break
+                # Also try without AM/PM if not specified (match any slot at that hour:minute)
+                if not time_match or not time_match.group(3):
+                    slot_time_no_ampm = slot_time_normalized.replace("AM", "").replace("PM", "")
+                    selected_no_ampm = selected_time_formatted.replace("AM", "").replace("PM", "")
+                    if selected_no_ampm == slot_time_no_ampm:
+                        selected_slot = slot
+                        break
 
         if not selected_slot:
             logger.warning(f"No matching slot found for {selected_date} at {selected_time}")
@@ -168,6 +191,12 @@ def get_booking_link(
                 if formatted["date"] == selected_slot["date"] and formatted["time"] == selected_slot["time"]:
                     booking_url = client.get_booking_url_for_slot(raw_slot)
                     break
+
+        # Add pre-fill parameters for name and email
+        if booking_url:
+            prefill_params = urlencode({"name": patient_name, "email": patient_email})
+            separator = "&" if "?" in booking_url else "?"
+            booking_url = f"{booking_url}{separator}{prefill_params}"
 
         logger.info(f"Generated booking link for {selected_slot['date']} at {selected_slot['time']}")
 
@@ -214,8 +243,14 @@ def find_booking(
 
         result = f"Found {len(events)} appointment(s) for {patient_email}:\n\n"
         for i, event in enumerate(events, 1):
-            start_time = event.get("start_time", "Unknown")
-            result += f"{i}. {event.get('name', 'Dental Check-up')} - {start_time}\n"
+            raw_time = event.get("start_time", "")
+            if raw_time:
+                utc_time = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+                local_time = utc_time.astimezone(CLINIC_TIMEZONE)
+                formatted_time = local_time.strftime("%A, %B %d, %Y at %I:%M %p")
+            else:
+                formatted_time = "Unknown"
+            result += f"{i}. {event.get('name', 'Dental Check-up')} - {formatted_time}\n"
             result += f"   Status: {event.get('status', 'active')}\n"
             result += f"   Event ID: {event.get('uri', '').split('/')[-1]}\n\n"
 
