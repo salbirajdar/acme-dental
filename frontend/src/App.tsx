@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { ChatMessage, ChatInput, QuickActions, TypingIndicator } from './components';
-import { sendChatMessage, checkHealth, generateThreadId } from './services/api';
+import { streamChatMessage, checkHealth, generateThreadId } from './services/api';
 import type { Message } from './types';
 import './App.css';
 
@@ -18,6 +18,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [threadId] = useState(generateThreadId);
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -46,26 +47,71 @@ function App() {
     addMessage(content, 'user');
     setIsLoading(true);
 
+    // Create a placeholder message for streaming
+    const assistantMessageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      content: '',
+      type: 'assistant',
+      timestamp: new Date(),
+    };
+    setMessages((prev) => [...prev, assistantMessage]);
+    setStreamingMessageId(assistantMessageId);
+
     try {
-      const response = await sendChatMessage({
-        message: content,
-        thread_id: threadId,
-      });
-      addMessage(response.response, 'assistant');
+      await streamChatMessage(
+        { message: content, thread_id: threadId },
+        // onChunk: append text to the streaming message
+        (chunk) => {
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantMessageId
+                ? { ...msg, content: msg.content + chunk }
+                : msg
+            )
+          );
+        },
+        // onComplete: streaming finished
+        () => {
+          setStreamingMessageId(null);
+          setIsLoading(false);
+        },
+        // onError: handle errors
+        (error) => {
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantMessageId
+                ? { ...msg, content: `Sorry, something went wrong: ${error}`, type: 'error' }
+                : msg
+            )
+          );
+          setStreamingMessageId(null);
+          setIsLoading(false);
+        }
+      );
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : 'An unexpected error occurred';
 
       if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
-        addMessage(
-          'Unable to connect to the server. Please make sure the backend is running.',
-          'error'
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantMessageId
+              ? { ...msg, content: 'Unable to connect to the server. Please make sure the backend is running.', type: 'error' }
+              : msg
+          )
         );
         setIsConnected(false);
       } else {
-        addMessage(`Sorry, something went wrong: ${errorMessage}`, 'error');
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantMessageId
+              ? { ...msg, content: `Sorry, something went wrong: ${errorMessage}`, type: 'error' }
+              : msg
+          )
+        );
       }
-    } finally {
+      setStreamingMessageId(null);
       setIsLoading(false);
     }
   };
@@ -91,9 +137,13 @@ function App() {
       <main className="chat-container">
         <div className="messages">
           {messages.map((message) => (
-            <ChatMessage key={message.id} message={message} />
+            <ChatMessage
+              key={message.id}
+              message={message}
+              isStreaming={message.id === streamingMessageId}
+            />
           ))}
-          {isLoading && <TypingIndicator />}
+          {isLoading && !streamingMessageId && <TypingIndicator />}
           <div ref={messagesEndRef} />
         </div>
 

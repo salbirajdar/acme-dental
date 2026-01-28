@@ -3,6 +3,7 @@
 import os
 import re
 from collections import defaultdict
+from collections.abc import Generator
 from datetime import datetime
 from typing import Annotated
 from urllib.parse import urlencode
@@ -525,3 +526,72 @@ def get_agent_response(agent, user_message: str, thread_id: str = "default") -> 
 
     logger.warning("No AI message found in response")
     return "I'm sorry, I couldn't generate a response. Please try again."
+
+
+def stream_agent_response(agent, user_message: str, thread_id: str = "default") -> Generator[str, None, None]:
+    """Stream a response from the agent for a user message.
+
+    Args:
+        agent: The LangGraph agent
+        user_message: The user's input message
+        thread_id: Conversation thread ID for memory
+
+    Yields:
+        Text chunks as they are generated (buffered to word boundaries)
+    """
+    logger.info(f"Streaming message (thread={thread_id}): {user_message[:100]}...")
+    config = {"configurable": {"thread_id": thread_id}}
+
+    # Buffer to accumulate text until word boundary
+    buffer = ""
+
+    def flush_buffer_to_word_boundary():
+        """Yield complete words from buffer, keep partial word."""
+        nonlocal buffer
+        if not buffer:
+            return None
+
+        # Find last word boundary (space or newline)
+        last_boundary = max(buffer.rfind(" "), buffer.rfind("\n"))
+
+        if last_boundary == -1:
+            # No boundary found, keep buffering
+            return None
+
+        # Yield up to and including the boundary
+        to_yield = buffer[: last_boundary + 1]
+        buffer = buffer[last_boundary + 1 :]
+        return to_yield
+
+    # Stream the agent response
+    for chunk in agent.stream(
+        {"messages": [HumanMessage(content=user_message)]},
+        config=config,
+        stream_mode="messages",
+    ):
+        # chunk is a tuple of (message, metadata)
+        if isinstance(chunk, tuple) and len(chunk) >= 1:
+            message = chunk[0]
+            # Only yield content from AIMessage chunks
+            if isinstance(message, AIMessage) and message.content:
+                content = message.content
+                # Handle both string and list content (Claude can return either)
+                if isinstance(content, str):
+                    buffer += content
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            buffer += block.get("text", "")
+                        elif isinstance(block, str):
+                            buffer += block
+
+                # Try to yield complete words
+                result = flush_buffer_to_word_boundary()
+                if result:
+                    yield result
+
+    # Yield any remaining content
+    if buffer:
+        yield buffer
+
+    logger.info("Streaming complete")

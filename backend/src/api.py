@@ -9,8 +9,9 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
+from sse_starlette.sse import EventSourceResponse
 
-from src.agent import create_acme_dental_agent, get_agent_response
+from src.agent import create_acme_dental_agent, get_agent_response, stream_agent_response
 from src.cache import get_scheduling_cache, start_cache, stop_cache
 from src.logging_config import get_logger, setup_logging
 from src.webhooks import handle_webhook_event, handle_webhook_ping, verify_webhook_signature
@@ -167,6 +168,67 @@ async def chat(request: ChatRequest):
     except Exception as e:
         logger.error(f"Error processing chat request: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}") from e
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """Stream a chat response from the AI dental receptionist.
+
+    Returns Server-Sent Events (SSE) with response chunks as they are generated.
+    Use the same thread_id across messages to maintain conversation context.
+    """
+    global _agent
+
+    if _agent is None:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+
+    logger.info(f"Stream chat request (thread={request.thread_id}): {request.message[:50]}...")
+
+    async def event_generator():
+        """Generate SSE events from the agent stream."""
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def stream_to_queue():
+            """Run the sync generator and push chunks to the queue."""
+            try:
+                for chunk in stream_agent_response(_agent, request.message, request.thread_id):
+                    if chunk:
+                        queue.put_nowait(chunk)
+                queue.put_nowait(None)  # Signal completion
+            except Exception as e:
+                queue.put_nowait(e)  # Signal error
+
+        # Start streaming in background thread
+        stream_task = asyncio.get_event_loop().run_in_executor(None, stream_to_queue)
+
+        try:
+            while True:
+                # Wait for chunks with a small timeout to allow checking task status
+                try:
+                    chunk = await asyncio.wait_for(queue.get(), timeout=0.1)
+                except TimeoutError:
+                    continue
+
+                if chunk is None:
+                    # Streaming complete
+                    yield {"event": "done", "data": ""}
+                    logger.info("Stream completed successfully")
+                    break
+                elif isinstance(chunk, Exception):
+                    # Error occurred
+                    logger.error(f"Error in stream: {chunk}")
+                    yield {"event": "error", "data": str(chunk)}
+                    break
+                else:
+                    yield {"event": "message", "data": chunk}
+                    await asyncio.sleep(0.20)
+
+            await stream_task
+        except Exception as e:
+            logger.error(f"Error in stream: {e}")
+            yield {"event": "error", "data": str(e)}
+
+    return EventSourceResponse(event_generator())
 
 
 @app.post("/webhooks/calendly", response_model=WebhookResponse)

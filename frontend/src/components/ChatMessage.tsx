@@ -3,6 +3,7 @@ import './ChatMessage.css';
 
 interface ChatMessageProps {
   message: Message;
+  isStreaming?: boolean;
 }
 
 function formatTime(date: Date): string {
@@ -25,11 +26,11 @@ function formatContent(content: string): string {
   return formatted;
 }
 
-export function ChatMessage({ message }: ChatMessageProps) {
+export function ChatMessage({ message, isStreaming = false }: ChatMessageProps) {
   return (
     <div className={`message ${message.type}`}>
       <div
-        className="message-content"
+        className={`message-content ${isStreaming ? 'streaming' : ''}`}
         dangerouslySetInnerHTML={{ __html: formatContent(message.content) }}
       />
       <span className="message-time">{formatTime(message.timestamp)}</span>

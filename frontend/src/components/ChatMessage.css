@@ -66,3 +66,20 @@
 .message.user .message-time {
   align-self: flex-end;
 }
+
+/* Streaming cursor */
+.message-content.streaming::after {
+  content: '▌';
+  display: inline;
+  color: #0ea5e9;
+  animation: blink 0.7s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
